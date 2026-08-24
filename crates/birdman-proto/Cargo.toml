@@ -1,0 +1,13 @@
+[package]
+name = "birdman-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+birdman-store = { path = "../birdman-store" }
+birdman-backend = { path = "../birdman-backend" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

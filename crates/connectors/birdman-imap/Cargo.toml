@@ -1,0 +1,23 @@
+[package]
+name = "birdman-imap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+async-native-tls = { version = "0.4", default-features = false, features = ["runtime-tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+futures-util = "0.3"
+async-channel = "2"
+log = "0.4"
+birdman-auth = { path = "../../birdman-auth" }
+birdman-backend = { path = "../../birdman-backend" }
+keyring = { version = "4", features = ["zbus-secret-service-keyring-store"] }
+birdman-mime = { path = "../../birdman-mime" }
+birdman-store = { path = "../../birdman-store" }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,85 @@
+# Supply-chain policy, enforced by `cargo deny check` in CI.
+#
+# The reason this exists: Birdman parses hostile input on every message opened.
+# `ammonia` and `html5ever` decide what markup reaches the reading pane, and
+# `mail-parser` decides what a message even is. Nothing was telling us when
+# either shipped a fix.
+
+[advisories]
+yanked = "deny"
+# Only flag *our* unmaintained dependencies, not the whole transitive closure.
+# The first run found thirteen, and every one arrived through gpui or wry --
+# gtk3 bindings, `ttf-parser`, `proc-macro-error`. We cannot act on those
+# without replacing the UI framework, and a check that is permanently red is a
+# check nobody reads. Vulnerabilities are still denied everywhere, transitive
+# or not; this narrows *unmaintained* to the crates we actually chose.
+unmaintained = "workspace"
+# Reviewed, accepted exceptions go here, each with its advisory id and a reason.
+ignore = [
+    # gtk 0.18 (GTK3 bindings), unmaintained. Linux-only, and not ours to
+    # choose: `wry`'s child-webview embedding is a wrapper over WebKitGTK, so
+    # the reading pane needs GTK initialised and its loop pumped. GTK4 is not
+    # an option while wry itself is on GTK3, and the version is pinned to
+    # wry's own so Cargo resolves one copy.
+    #
+    # Unmaintained, not vulnerable. Revisit when wry moves.
+    "RUSTSEC-2024-0415",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",
+    # webpki-roots / webpki-root-certs: the Mozilla CA bundle, which is data
+    # rather than code.
+    "CDLA-Permissive-2.0",
+    # libbz2-rs-sys. A BSD-style permissive licence with its own SPDX id.
+    "bzip2-1.0.6",
+    # libfuzzer-sys, reached only through rav1e's AVIF encoder inside `image`
+    # inside gpui, and not linked in a normal build. NCSA is the
+    # University of Illinois permissive licence -- BSD-2-Clause plus MIT.
+    "NCSA",
+]
+confidence-threshold = 0.9
+
+# RESOLVED. There are deliberately no exceptions here.
+#
+# There used to be three, for Zed's `zlog`, `ztracing` and `ztracing_macro`,
+# all GPL-3.0-or-later. They arrived through a git pin on Zed's `main` --
+# gpui itself is Apache-2.0, which is what made it easy to miss -- and meant
+# the desktop binary could not honestly be distributed under MIT, because the
+# combined work was GPL-3.0.
+#
+# `birdman-ui` now depends on the crates.io release of gpui, which pulls
+# neither. Every crate in the workspace is MIT-compatible, and the whole thing
+# is distributable. Do not re-add a GPL exception to get a git pin building:
+# that is the trade that was just undone.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Our own crates depend on each other by path with no version, which reads as a
+# wildcard. That is how a workspace is built; the check is here for wildcards on
+# *published* crates, which are the ones that can change under us. This only
+# applies to crates marked `publish = false`, which is why every crate in the
+# workspace carries it -- they are an application, not a library.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Empty, and worth keeping empty. Every dependency now comes from crates.io,
+# which is what makes the workspace publishable at all -- crates.io refuses a
+# crate with a git dependency, so one pin here would take `birdman-ui` off the
+# registry again and, going by the last one, quietly change the licence too.
+allow-git = []

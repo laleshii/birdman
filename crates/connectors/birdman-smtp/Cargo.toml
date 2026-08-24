@@ -1,0 +1,21 @@
+[package]
+name = "birdman-smtp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+mail-builder = "0.5"
+smtp = { package = "mail-send", version = "0.6" }
+birdman-auth = { path = "../../birdman-auth" }
+birdman-backend = { path = "../../birdman-backend" }
+birdman-mime = { path = "../../birdman-mime" }
+thiserror = "2"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+birdman-imap = { path = "../birdman-imap" }
+birdman-store = { path = "../../birdman-store" }
+tempfile = "3"

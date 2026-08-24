@@ -1,0 +1,10 @@
+[package]
+name = "birdman-mime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+mail-parser = "0.11.6"
+thiserror = "2"

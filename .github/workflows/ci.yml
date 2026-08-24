@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Advisories land against code that hasn't changed, so the audit has to run
+    # on a clock as well as on a diff. Without this, a PR-only CI reports a
+    # vulnerable dependency whenever someone next happens to open a PR.
+    - cron: "17 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  # Deliberately no `RUSTFLAGS: -D warnings`: it applies to dependencies too, so
+  # one warning in a transitive crate we don't control fails the build. Our own
+  # code is held to `-D warnings` by the clippy step below.
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+
+      # gpui and the reading pane's webview need these on Linux. Listed here
+      # rather than only in the README so the list is executable and stays true.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libfontconfig-dev \
+            libfreetype-dev libssl-dev libwayland-dev libxcb1-dev \
+            libx11-dev libgbm-dev libvulkan-dev
+
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test
+        # The greenmail integration tests need a live IMAP/SMTP server and are
+        # `#[ignore]`d; this runs everything else.
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  deny:
+    name: supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources licenses
+
+  connector-integration:
+    name: IMAP/SMTP integration
+    runs-on: ubuntu-latest
+    services:
+      greenmail:
+        image: greenmail/standalone:2.1.12
+        env:
+          GREENMAIL_OPTS: >-
+            -Dgreenmail.setup.test.all
+            -Dgreenmail.hostname=0.0.0.0
+            -Dgreenmail.users=testuser:testpass@localhost
+            -Dgreenmail.auth.disabled=false
+        ports:
+          - 3025:3025
+          - 3465:3465
+          - 3993:3993
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Wait for GreenMail and seed the sync fixture
+        run: |
+          python3 - <<'PY'
+          import smtplib
+          import time
+          from email.message import EmailMessage
+
+          for attempt in range(30):
+              try:
+                  smtp = smtplib.SMTP("127.0.0.1", 3025, timeout=2)
+                  smtp.login("testuser", "testpass")
+                  break
+              except OSError:
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+
+          first = EmailMessage()
+          first["From"] = "sender@example.com"
+          first["To"] = "testuser@localhost"
+          first["Subject"] = "Integration test message 1"
+          first.set_content("First message body.")
+          smtp.send_message(first)
+
+          second = EmailMessage()
+          second["From"] = "sender@example.com"
+          second["To"] = "testuser@localhost"
+          second["Subject"] = "Integration test message 2 with attachment"
+          second.set_content("Second message body.")
+          second.add_attachment(b"attachment", maintype="application", subtype="octet-stream", filename="fixture.bin")
+          smtp.send_message(second)
+          smtp.quit()
+          PY
+
+      # Run separately and in order because the tests intentionally share the
+      # one real mailbox supplied by GreenMail.
+      - name: Full IMAP sync
+        run: cargo test -p birdman-imap --test greenmail full_sync_against_a_real_imap_server -- --ignored
+
+      - name: IMAP IDLE
+        run: cargo test -p birdman-imap --test greenmail idle_wakes_on_new_mail -- --ignored
+
+      - name: SMTP delivery
+        run: cargo test -p birdman-smtp --test greenmail_send -- --ignored

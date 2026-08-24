@@ -1,0 +1,13 @@
+[package]
+name = "birdman-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+birdman-store = { path = "../birdman-store" }
+birdman-mime = { path = "../birdman-mime" }
+serde = { version = "1", features = ["derive"] }
+time = "0.3"
+thiserror = "2"

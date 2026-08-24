@@ -1,0 +1,19 @@
+[package]
+name = "birdman-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+birdman-proto = { path = "../birdman-proto" }
+birdman-store = { path = "../birdman-store" }
+birdman-backend = { path = "../birdman-backend" }
+log = "0.4"
+async-channel = "2"
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+
+[dev-dependencies]
+birdman-mime = { path = "../birdman-mime" }
+tempfile = "3"

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Birdman
+Comment=A scriptable email client
+Exec=birdman-desktop
+Icon=mail-client
+Terminal=false
+Categories=Network;Email;
+StartupWMClass=birdman-desktop

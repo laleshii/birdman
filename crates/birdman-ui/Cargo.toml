@@ -1,0 +1,64 @@
+[package]
+name = "birdman-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "birdman-desktop"
+path = "src/main.rs"
+
+[dependencies]
+futures = "0.3"
+# The crates.io release, deliberately, not a pin on Zed's `main`.
+#
+# The git rev this used to track is Apache-2.0 itself but pulls Zed's `zlog`
+# and `ztracing`, which are GPL-3.0 -- so a distributed desktop binary could
+# not honestly be MIT. It also splits the platform layer into `gpui_platform`,
+# which Zed has never published, and a git dependency makes the crate
+# unpublishable to crates.io regardless.
+#
+# The published crate bundles the platform layer and pulls neither GPL crate.
+# The one thing it lacks is `external_drag_payload`, which is why attachment
+# pills open on click rather than dragging out to another application.
+gpui = "0.2.2"
+async-channel = "2"
+birdman-auth = { path = "../birdman-auth" }
+keyring = { version = "4", features = ["zbus-secret-service-keyring-store"] }
+birdman-backend = { path = "../birdman-backend" }
+birdman-config = { path = "../birdman-config" }
+birdman-proto = { path = "../birdman-proto" }
+birdman-client = { path = "../birdman-client" }
+birdman-store = { path = "../birdman-store" }
+birdman-mime = { path = "../birdman-mime" }
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+open = "5"
+base64 = "0.22"
+log = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# The reading pane's HTML view. `ammonia` is depended on directly rather than
+# reusing `mail_render::sanitize` because `birdman-ui` cannot link `mail-render`
+# (see the root Cargo.toml's build-split note) -- ammonia itself pulls
+# html5ever, not stylo, so it's safe in this graph.
+wry = "0.56"
+# Must stay on the same major as gpui's pin (workspace `raw-window-handle = "0.6"`)
+# and wry's `^0.6`, or `HasWindowHandle` is a different trait to each of them and
+# `build_as_child` won't accept a gpui `Window`.
+raw-window-handle = "0.6"
+ammonia = "4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Only for the cursor handoff in `src/cursor.rs` -- see that module for why it
+# needs to talk to AppKit directly. Already in the tree via wry and gpui.
+objc2 = "0.6"
+
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+# `wry`'s Linux embedding (`build_as_child`) needs GTK initialized and its
+# main loop pumped before it will attach -- gpui never does either, since it
+# drives its own X11/Wayland windowing rather than GTK's. See `main.rs`'s
+# `pump_gtk` and the module doc on `webview.rs`. Version pinned to match
+# wry's own `gtk = "0.18"` so Cargo resolves one copy, not two.
+gtk = "0.18"

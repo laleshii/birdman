@@ -1,0 +1,18 @@
+[package]
+name = "birdman-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+birdman-auth = { path = "../birdman-auth" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "5"
+open = "5"
+log = "0.4"
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

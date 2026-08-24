@@ -1,0 +1,25 @@
+[package]
+name = "birdman-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "birdman"
+path = "src/main.rs"
+
+[dependencies]
+birdman-config = { path = "../birdman-config" }
+birdman-proto = { path = "../birdman-proto" }
+birdman-client = { path = "../birdman-client" }
+birdman-store = { path = "../birdman-store" }
+birdman-backend = { path = "../birdman-backend" }
+chrono = "0.4"
+birdman-auth = { path = "../birdman-auth" }
+birdman-imap = { path = "../connectors/birdman-imap" }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+open = "5"
+rpassword = "7"
+libc = "0.2"
+serde_json = "1"
