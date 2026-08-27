@@ -479,8 +479,15 @@ fn sidebar(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
                 }),
         )
         .child({
-            let status = s.status.clone().unwrap_or_default();
-            let is_error = status.starts_with("Sync error");
+            // Archive/move/delete/flag in flight take priority over the sync
+            // state -- the reader just did something and wants to know it's
+            // still working, the way Apple Mail's status area shows "Deleting
+            // 2 messages" over its usual idle text.
+            let activity = s.activity_summary();
+            let status = activity
+                .clone()
+                .unwrap_or_else(|| s.status.clone().unwrap_or_default());
+            let is_error = activity.is_none() && status.starts_with("Sync error");
             div()
                 .flex_shrink_0()
                 .w_full()
@@ -496,8 +503,11 @@ fn sidebar(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
                         .id("sync-status")
                         .flex_1()
                         .min_w(px(0.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_1p5()
                         .truncate()
-                        .text_center()
                         .text_color(theme::color(if is_error {
                             theme::DANGER
                         } else {
@@ -512,6 +522,7 @@ fn sidebar(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
                                 state.set_logs(open, cx);
                             });
                         })
+                        .when(activity.is_some(), |el| el.child(spinner()))
                         .child(status)
                 })
                 .child(div().flex_shrink_0().child(settings_button(state)))
@@ -2410,80 +2421,102 @@ fn reading_pane(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
     };
     let msg = s.visible_messages().iter().find(|m| m.id == message_id);
 
+    let render_toolbar_action = |action: &ToolbarAction| -> gpui::AnyElement {
+        match action {
+            // Split out into groups before rendering -- see below.
+            ToolbarAction::Spacer => div().into_any_element(),
+            ToolbarAction::Reply => {
+                toolbar_button("icons/reply.svg", "compose-reply", |state, cx| {
+                    state.reply(false, cx)
+                })
+                .into_any_element()
+            }
+            ToolbarAction::ReplyAll => {
+                toolbar_button("icons/reply-all.svg", "compose-reply-all", |state, cx| {
+                    state.reply(true, cx)
+                })
+                .into_any_element()
+            }
+            ToolbarAction::Forward => {
+                toolbar_button("icons/forward.svg", "compose-forward", |state, cx| {
+                    state.forward(cx)
+                })
+                .into_any_element()
+            }
+            ToolbarAction::Move => {
+                toolbar_button("icons/folder.svg", "message-move", |state, cx| {
+                    let open = !state.move_picker_open;
+                    state.set_move_picker(open, cx)
+                })
+                .into_any_element()
+            }
+            ToolbarAction::Flag => {
+                toolbar_button("icons/flag.svg", "message-flag", |state, cx| {
+                    state.toggle_flag_selected(cx)
+                })
+                .into_any_element()
+            }
+            // The icon shows what the click does, not what is currently on.
+            ToolbarAction::DarkMode => {
+                let (icon, id) = if s.selected_is_darkened() {
+                    ("icons/sun.svg", "message-undarken")
+                } else {
+                    ("icons/moon.svg", "message-darken")
+                };
+                toolbar_button(icon, id, |state, cx| state.toggle_dark_mode(cx))
+                    .into_any_element()
+            }
+            ToolbarAction::Divider => div()
+                .w(px(1.0))
+                .h(px(CONTROL_HEIGHT - 8.0))
+                .mx_1()
+                .flex_shrink_0()
+                .bg(theme::color(theme::BORDER))
+                .into_any_element(),
+            ToolbarAction::Archive => {
+                toolbar_button("icons/archive.svg", "message-archive", |state, cx| {
+                    state.archive_selected(cx)
+                })
+                .into_any_element()
+            }
+            ToolbarAction::Delete => {
+                toolbar_button("icons/trash.svg", "message-delete", |state, cx| {
+                    state.delete_selected(cx)
+                })
+                .into_any_element()
+            }
+        }
+    };
+
+    // Grouped at each `Spacer` and joined with `justify_between` rather than
+    // a `margin-left: auto` spacer div: taffy only fully hands a flex row's
+    // free space to an auto margin when it is the row's *sole* auto margin,
+    // and split across groups like this one it visibly under-pushed the
+    // trailing icons short of the row's right edge.
+    let toolbar_groups = s
+        .appearance
+        .toolbar_actions
+        .split(|a| matches!(a, ToolbarAction::Spacer))
+        .map(|group| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .children(group.iter().map(&render_toolbar_action))
+                .into_any_element()
+        });
+
     let toolbar = div()
         .flex()
         .flex_shrink_0()
+        .w_full()
         .items_center()
-        .gap_2()
+        .justify_between()
         .p_2()
         .border_b_1()
         .border_color(theme::color(theme::BORDER))
         // Contents and order come from `config::ToolbarAction`.
-        .children(s.appearance.toolbar_actions.iter().map(|action| {
-            match action {
-                ToolbarAction::Spacer => div().ml_auto().into_any_element(),
-                ToolbarAction::Reply => {
-                    toolbar_button("icons/reply.svg", "compose-reply", |state, cx| {
-                        state.reply(false, cx)
-                    })
-                    .into_any_element()
-                }
-                ToolbarAction::ReplyAll => {
-                    toolbar_button("icons/reply-all.svg", "compose-reply-all", |state, cx| {
-                        state.reply(true, cx)
-                    })
-                    .into_any_element()
-                }
-                ToolbarAction::Forward => {
-                    toolbar_button("icons/forward.svg", "compose-forward", |state, cx| {
-                        state.forward(cx)
-                    })
-                    .into_any_element()
-                }
-                ToolbarAction::Move => {
-                    toolbar_button("icons/folder.svg", "message-move", |state, cx| {
-                        let open = !state.move_picker_open;
-                        state.set_move_picker(open, cx)
-                    })
-                    .into_any_element()
-                }
-                ToolbarAction::Flag => {
-                    toolbar_button("icons/flag.svg", "message-flag", |state, cx| {
-                        state.toggle_flag_selected(cx)
-                    })
-                    .into_any_element()
-                }
-                // The icon shows what the click does, not what is currently on.
-                ToolbarAction::DarkMode => {
-                    let (icon, id) = if s.selected_is_darkened() {
-                        ("icons/sun.svg", "message-undarken")
-                    } else {
-                        ("icons/moon.svg", "message-darken")
-                    };
-                    toolbar_button(icon, id, |state, cx| state.toggle_dark_mode(cx))
-                        .into_any_element()
-                }
-                ToolbarAction::Divider => div()
-                    .w(px(1.0))
-                    .h(px(CONTROL_HEIGHT - 8.0))
-                    .mx_1()
-                    .flex_shrink_0()
-                    .bg(theme::color(theme::BORDER))
-                    .into_any_element(),
-                ToolbarAction::Archive => {
-                    toolbar_button("icons/archive.svg", "message-archive", |state, cx| {
-                        state.archive_selected(cx)
-                    })
-                    .into_any_element()
-                }
-                ToolbarAction::Delete => {
-                    toolbar_button("icons/trash.svg", "message-delete", |state, cx| {
-                        state.delete_selected(cx)
-                    })
-                    .into_any_element()
-                }
-            }
-        }));
+        .children(toolbar_groups);
 
     let mut header = div()
         .id("reading-pane-header")

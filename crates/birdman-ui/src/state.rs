@@ -30,6 +30,33 @@ pub struct Notification {
     pub failed: bool,
 }
 
+/// A queued mutation still waiting on the daemon's reply. Surfaced in the
+/// status line the way Apple Mail shows "Deleting 2 messages" -- distinct
+/// from `Notification`, which is a one-shot toast rather than a live count.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PendingOperation {
+    pub id: u64,
+    pub kind: OperationKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OperationKind {
+    Flag,
+    Move,
+    Delete,
+}
+
+impl OperationKind {
+    fn label(self, count: usize) -> String {
+        let s = if count == 1 { "" } else { "s" };
+        match self {
+            OperationKind::Flag => format!("Updating {count} flag{s}"),
+            OperationKind::Move => format!("Moving {count} message{s}"),
+            OperationKind::Delete => format!("Deleting {count} message{s}"),
+        }
+    }
+}
+
 const SUBJECT_MENU_HEIGHT: f32 = 30.0;
 
 /// Shorter than a notification: it confirms something the reader just did
@@ -111,6 +138,10 @@ pub struct AppState {
     /// "Copied" overwrote "Syncing..." and sat there as the mailbox's state.
     pub notifications: Vec<Notification>,
     next_notification: u64,
+    /// In-flight archive/move/delete/flag commands, for the status line's
+    /// activity summary.
+    pub pending_operations: Vec<PendingOperation>,
+    next_operation: u64,
 
     pub search_focus_handle: gpui::FocusHandle,
     /// So anything that takes focus can give it back. Without it, closing the
@@ -254,6 +285,8 @@ impl AppState {
             status: None,
             notifications: Vec::new(),
             next_notification: 1,
+            pending_operations: Vec::new(),
+            next_operation: 1,
             list_scroll_handle: gpui::UniformListScrollHandle::new(),
             list_viewport_height: Rc::new(Cell::new(0.0)),
             list_scrollbar_dragging: Rc::new(Cell::new(false)),
@@ -767,36 +800,82 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// The one place the UI invokes a backend. `on_done` runs only on success,
-    /// with `&mut AppState`, so an action can follow up without threading state
-    /// through the async block.
+    /// The one place the UI invokes a backend. `on_done` runs only on success
+    /// and `on_fail` only on failure -- typically to undo `dispatch`'s caller's
+    /// own optimistic update -- each with `&mut AppState`, so the action can
+    /// follow up without threading state through the async block. `kind`
+    /// tracks the command in `pending_operations` for the status line's
+    /// activity summary, for the duration of the round trip.
     fn dispatch(
         &mut self,
         account: birdman_store::AccountId,
         command: birdman_backend::Command,
+        kind: OperationKind,
         cx: &mut Context<Self>,
         on_done: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        on_fail: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
     ) {
         // These all apply to the visible list immediately, so the folder's
         // announcement tells this window nothing. See `self_changed_folder`.
         self.self_changed_folder = self.selected_folder;
         let label = command.describe();
+        let operation_id = self.begin_operation(kind, cx);
         let service = self.service.clone();
         cx.spawn(async move |this, cx| {
             let result = service.execute(account, command).await;
-            let _ = this.update(cx, |state, cx| match result {
-                Ok(_) => on_done(state, cx),
-                Err(err) => {
-                    log::warn!("{label} failed: {err}");
-                    state.notify_failure(
-                        format!("{label} failed: {}", short_error(&err.to_string())),
-                        cx,
-                    );
-                    cx.notify();
+            let _ = this.update(cx, |state, cx| {
+                state.end_operation(operation_id, cx);
+                match result {
+                    Ok(_) => on_done(state, cx),
+                    Err(err) => {
+                        log::warn!("{label} failed: {err}");
+                        state.notify_failure(
+                            format!("{label} failed: {}", short_error(&err.to_string())),
+                            cx,
+                        );
+                        on_fail(state, cx);
+                        cx.notify();
+                    }
                 }
             });
         })
         .detach();
+    }
+
+    fn begin_operation(&mut self, kind: OperationKind, cx: &mut Context<Self>) -> u64 {
+        let id = self.next_operation;
+        self.next_operation += 1;
+        self.pending_operations.push(PendingOperation { id, kind });
+        cx.notify();
+        id
+    }
+
+    fn end_operation(&mut self, id: u64, cx: &mut Context<Self>) {
+        let before = self.pending_operations.len();
+        self.pending_operations.retain(|op| op.id != id);
+        if self.pending_operations.len() != before {
+            cx.notify();
+        }
+    }
+
+    /// `None` when nothing is in flight, so the status line falls back to the
+    /// sync state it otherwise shows.
+    pub fn activity_summary(&self) -> Option<String> {
+        if self.pending_operations.is_empty() {
+            return None;
+        }
+        let parts: Vec<String> = [OperationKind::Delete, OperationKind::Move, OperationKind::Flag]
+            .into_iter()
+            .filter_map(|kind| {
+                let count = self
+                    .pending_operations
+                    .iter()
+                    .filter(|op| op.kind == kind)
+                    .count();
+                (count > 0).then(|| kind.label(count))
+            })
+            .collect();
+        Some(parts.join(" · "))
     }
 
     /// Resyncs the *other end* of an action: archiving moves a message into All
@@ -1500,10 +1579,11 @@ impl AppState {
             return;
         };
         let mut target_flags = msg.flags;
+        let previous_flagged = target_flags.flagged;
         target_flags.flagged = !target_flags.flagged;
 
-        // Optimistic: a failure surfaces on the status line and the next sync
-        // corrects the flag, which beats a visibly laggy toggle.
+        // Optimistic: reverted on failure below, which beats a visibly laggy
+        // toggle for the common case of it succeeding.
         for list in [Some(&mut self.messages), self.search_results.as_mut()]
             .into_iter()
             .flatten()
@@ -1523,6 +1603,7 @@ impl AppState {
                 message: message_id,
                 flags: target_flags,
             },
+            OperationKind::Flag,
             cx,
             move |state, cx| {
                 // A membership change for Flagged: on Gmail `\Flagged` *is* the
@@ -1531,6 +1612,16 @@ impl AppState {
                     .special_folder(account, birdman_store::SpecialUse::Flagged)
                     .map(|f| f.id);
                 state.resync_folders(flagged.into_iter().collect(), cx);
+            },
+            move |state, _cx| {
+                for list in [Some(&mut state.messages), state.search_results.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(m) = list.iter_mut().find(|m| m.id == message_id) {
+                        m.flags.flagged = previous_flagged;
+                    }
+                }
             },
         );
     }
@@ -2124,17 +2215,20 @@ impl AppState {
         };
         self.forget_selected_message(cx);
 
+        let restore = msg;
         self.dispatch(
             account,
             birdman_backend::Command::MoveMessage {
                 message: message_id,
                 to_folder: target,
             },
+            OperationKind::Move,
             cx,
             move |state, cx| {
                 // Both ends: neither folder learns this on its own.
                 state.resync_folders(vec![source, target], cx);
             },
+            move |state, cx| state.restore_forgotten_message(restore, cx),
         );
     }
 
@@ -2175,11 +2269,45 @@ impl AppState {
         }
     }
 
+    /// Undoes `forget_selected_message` on a failed archive/move/delete.
+    /// Reinserts at the sorted position rather than selecting it back --
+    /// the reader has already moved on to the successor, and a failure
+    /// shouldn't yank their focus away from it.
+    fn restore_forgotten_message(&mut self, msg: MessageSummary, cx: &mut Context<Self>) {
+        let id = msg.id;
+        if !self.messages.iter().any(|m| m.id == id) {
+            let at = self
+                .messages
+                .iter()
+                .position(|m| (m.date, m.id) < (msg.date, msg.id))
+                .unwrap_or(self.messages.len());
+            self.messages.insert(at, msg.clone());
+        }
+        if let Some(results) = &mut self.search_results {
+            if !results.iter().any(|m| m.id == id) {
+                let at = results
+                    .iter()
+                    .position(|m| (m.date, m.id) < (msg.date, msg.id))
+                    .unwrap_or(results.len());
+                results.insert(at, msg);
+            }
+        }
+        cx.notify();
+    }
+
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
         let Some(message_id) = self.selected_message else {
             return;
         };
         let Some(account) = self.account_of_message(message_id) else {
+            return;
+        };
+        let Some(msg) = self
+            .visible_messages()
+            .iter()
+            .find(|m| m.id == message_id)
+            .cloned()
+        else {
             return;
         };
         self.forget_selected_message(cx);
@@ -2188,6 +2316,7 @@ impl AppState {
             birdman_backend::Command::DeleteMessage {
                 message: message_id,
             },
+            OperationKind::Delete,
             cx,
             move |state, cx| {
                 // The message lands in Trash, which needs to hear about it.
@@ -2196,6 +2325,7 @@ impl AppState {
                     .map(|f| f.id);
                 state.resync_folders(trash.into_iter().collect(), cx);
             },
+            move |state, cx| state.restore_forgotten_message(msg, cx),
         );
     }
 }
