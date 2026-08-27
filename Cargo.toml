@@ -15,7 +15,7 @@ members = [
     "crates/connectors/birdman-smtp",
     "crates/birdman-ui",
 ]
-exclude = ["vendor/block-0.1.6", "vendor/imap-proto-0.16.7"]
+exclude = ["vendor/block-0.1.6", "vendor/imap-proto-0.16.7", "vendor/gpui-0.2.2"]
 
 # gpui 0.2.2 still reaches the abandoned `block` 0.1.6 crate through its
 # macOS stack. Rust 1.96 warns that its uninhabited extern-static type will
@@ -26,6 +26,11 @@ block = { path = "vendor/block-0.1.6" }
 # GreenMail emits a partial BODY response accepted by other IMAP clients but
 # rejected by imap-proto 0.16.7; see vendor/imap-proto-0.16.7/BIRDMAN-PATCH.md.
 imap-proto = { path = "vendor/imap-proto-0.16.7" }
+# `X11Window`'s `HasWindowHandle`/`HasDisplayHandle` are `unimplemented!()` in
+# the published 0.2.2, which panics the instant the reading pane's webview
+# tries to attach under XWayland. Already fixed on gpui's `main`; see
+# vendor/gpui-0.2.2/BIRDMAN-PATCH.md.
+gpui = { path = "vendor/gpui-0.2.2" }
 
 [workspace.package]
 version = "0.1.0"
