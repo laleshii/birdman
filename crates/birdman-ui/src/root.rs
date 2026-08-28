@@ -2450,12 +2450,10 @@ fn reading_pane(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
                 })
                 .into_any_element()
             }
-            ToolbarAction::Flag => {
-                toolbar_button("icons/flag.svg", "message-flag", |state, cx| {
-                    state.toggle_flag_selected(cx)
-                })
-                .into_any_element()
-            }
+            ToolbarAction::Flag => toolbar_button("icons/flag.svg", "message-flag", |state, cx| {
+                state.toggle_flag_selected(cx)
+            })
+            .into_any_element(),
             // The icon shows what the click does, not what is currently on.
             ToolbarAction::DarkMode => {
                 let (icon, id) = if s.selected_is_darkened() {
@@ -2463,8 +2461,7 @@ fn reading_pane(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
                 } else {
                     ("icons/moon.svg", "message-darken")
                 };
-                toolbar_button(icon, id, |state, cx| state.toggle_dark_mode(cx))
-                    .into_any_element()
+                toolbar_button(icon, id, |state, cx| state.toggle_dark_mode(cx)).into_any_element()
             }
             ToolbarAction::Divider => div()
                 .w(px(1.0))

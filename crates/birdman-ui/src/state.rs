@@ -864,17 +864,21 @@ impl AppState {
         if self.pending_operations.is_empty() {
             return None;
         }
-        let parts: Vec<String> = [OperationKind::Delete, OperationKind::Move, OperationKind::Flag]
-            .into_iter()
-            .filter_map(|kind| {
-                let count = self
-                    .pending_operations
-                    .iter()
-                    .filter(|op| op.kind == kind)
-                    .count();
-                (count > 0).then(|| kind.label(count))
-            })
-            .collect();
+        let parts: Vec<String> = [
+            OperationKind::Delete,
+            OperationKind::Move,
+            OperationKind::Flag,
+        ]
+        .into_iter()
+        .filter_map(|kind| {
+            let count = self
+                .pending_operations
+                .iter()
+                .filter(|op| op.kind == kind)
+                .count();
+            (count > 0).then(|| kind.label(count))
+        })
+        .collect();
         Some(parts.join(" · "))
     }
 
