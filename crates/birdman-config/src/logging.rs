@@ -18,11 +18,26 @@ struct FileLogger {
     /// `log::debug!` in the workspace; `enabled_respects_the_configured_level`
     /// is the guard against that returning.
     level: Level,
+    /// What everything outside the workspace is held to. html5ever logs every
+    /// token of every sanitized body -- ~10k lines for one email -- which at
+    /// `debug` flushes the whole log through `MAX_LOG_BYTES` in minutes and
+    /// costs real time on the render path, since each line is a synchronous
+    /// write.
+    dependency_level: Level,
 }
+
+/// Workspace crates all share this prefix, so a target that starts with it is
+/// ours and anything else came from a dependency.
+const WORKSPACE_TARGET_PREFIX: &str = "birdman";
 
 impl log::Log for FileLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= self.level
+        let ceiling = if metadata.target().starts_with(WORKSPACE_TARGET_PREFIX) {
+            self.level
+        } else {
+            self.dependency_level
+        };
+        metadata.level() <= ceiling
     }
 
     fn log(&self, record: &Record) {
@@ -65,12 +80,16 @@ pub fn init(data_dir: &Path) {
         .open(&path)
         .ok();
     let level = level_from_env();
+    let dependency_level = dependency_level_from_env(level);
     let logger = Box::leak(Box::new(FileLogger {
         file: Mutex::new(file),
         level: level.to_level().unwrap_or(Level::Info),
+        dependency_level: dependency_level.to_level().unwrap_or(Level::Info),
     }));
     if log::set_logger(logger).is_ok() {
-        log::set_max_level(level);
+        // The looser of the two, or the `log` macros would drop records before
+        // `enabled` ever saw them.
+        log::set_max_level(level.max(dependency_level));
     }
 }
 
@@ -141,18 +160,27 @@ fn level_from_env() -> LevelFilter {
     } else {
         LevelFilter::Info
     };
-    match std::env::var("BIRDMAN_LOG")
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "error" => LevelFilter::Error,
-        "warn" => LevelFilter::Warn,
-        "debug" => LevelFilter::Debug,
-        "trace" => LevelFilter::Trace,
-        "info" => LevelFilter::Info,
-        _ => default,
+    parse_level(&std::env::var("BIRDMAN_LOG").unwrap_or_default()).unwrap_or(default)
+}
+
+/// Dependencies are capped at `info` however loud the workspace is asked to be.
+/// `BIRDMAN_LOG_DEPS` lifts the cap for when the thing being debugged is inside
+/// one of them -- the TLS handshake and the OAuth2 refresh are only visible
+/// through `rustls` and `ureq`.
+fn dependency_level_from_env(workspace: LevelFilter) -> LevelFilter {
+    parse_level(&std::env::var("BIRDMAN_LOG_DEPS").unwrap_or_default())
+        .unwrap_or_else(|| workspace.min(LevelFilter::Info))
+}
+
+fn parse_level(value: &str) -> Option<LevelFilter> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "off" => Some(LevelFilter::Off),
+        "error" => Some(LevelFilter::Error),
+        "warn" => Some(LevelFilter::Warn),
+        "info" => Some(LevelFilter::Info),
+        "debug" => Some(LevelFilter::Debug),
+        "trace" => Some(LevelFilter::Trace),
+        _ => None,
     }
 }
 
@@ -183,16 +211,71 @@ mod tests {
         let logger = FileLogger {
             file: Mutex::new(None),
             level: Level::Debug,
+            dependency_level: Level::Info,
         };
-        assert!(logger.enabled(&Metadata::builder().level(Level::Debug).build()));
-        assert!(!logger.enabled(&Metadata::builder().level(Level::Trace).build()));
+        // Targeted: an untargeted record is a dependency's as far as `enabled`
+        // is concerned, and would be judged against the cap instead.
+        let ours = |level| {
+            logger.enabled(
+                &Metadata::builder()
+                    .target("birdman_config::logging")
+                    .level(level)
+                    .build(),
+            )
+        };
+        assert!(ours(Level::Debug));
+        assert!(!ours(Level::Trace));
 
         let quiet = FileLogger {
             file: Mutex::new(None),
             level: Level::Info,
+            dependency_level: Level::Info,
         };
-        assert!(!quiet.enabled(&Metadata::builder().level(Level::Debug).build()));
-        assert!(quiet.enabled(&Metadata::builder().level(Level::Warn).build()));
+        let theirs = |level| {
+            quiet.enabled(
+                &Metadata::builder()
+                    .target("birdman_config::logging")
+                    .level(level)
+                    .build(),
+            )
+        };
+        assert!(!theirs(Level::Debug));
+        assert!(theirs(Level::Warn));
+    }
+
+    #[test]
+    fn a_dependency_is_held_to_info_while_the_workspace_debugs() {
+        let logger = FileLogger {
+            file: Mutex::new(None),
+            level: Level::Debug,
+            dependency_level: Level::Info,
+        };
+        let at = |target: &'static str, level| {
+            logger.enabled(&Metadata::builder().target(target).level(level).build())
+        };
+
+        assert!(at("birdman_imap::sync", Level::Debug), "ours at debug");
+        assert!(
+            !at("html5ever::tree_builder", Level::Debug),
+            "a dependency's debug is what floods the log"
+        );
+        assert!(
+            at("html5ever::tree_builder", Level::Warn),
+            "a dependency still gets to report a problem"
+        );
+    }
+
+    #[test]
+    fn the_dependency_cap_never_exceeds_the_workspace_level() {
+        assert_eq!(
+            dependency_level_from_env(LevelFilter::Warn),
+            LevelFilter::Warn,
+            "quieter than info means quieter for everything"
+        );
+        assert_eq!(
+            dependency_level_from_env(LevelFilter::Trace),
+            LevelFilter::Info
+        );
     }
 
     use super::*;
