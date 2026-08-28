@@ -195,6 +195,9 @@ pub struct AppState {
     /// losing it on restart is wanted, since a fresh process should check a
     /// folder the first time it is opened.
     folder_last_synced: std::collections::HashMap<FolderId, std::time::Instant>,
+    /// Folders owed a resync once the burst that dirtied them is done. See
+    /// [`AppState::resync_folders`].
+    pending_resyncs: std::collections::HashSet<FolderId>,
     pub appearance: crate::config::Appearance,
     pub sidebar_more_expanded: bool,
     pub move_picker_open: bool,
@@ -297,6 +300,7 @@ impl AppState {
             reading_pane_rect: Rc::new(Cell::new((0.0, 0.0, 0.0, 0.0))),
             sidebar_visible: true,
             folder_last_synced: std::collections::HashMap::new(),
+            pending_resyncs: std::collections::HashSet::new(),
             appearance: crate::config::Appearance::default(),
             sidebar_more_expanded: false,
             move_picker_open: false,
@@ -889,7 +893,20 @@ impl AppState {
     /// where it went.
     ///
     /// Deliberately quiet -- the action itself already reported its outcome.
-    pub fn resync_folders(&self, folder_ids: Vec<FolderId>, cx: &mut Context<Self>) {
+    pub fn resync_folders(&mut self, folder_ids: Vec<FolderId>, cx: &mut Context<Self>) {
+        // Coalesced, because a burst issues one of these per action: nine
+        // deletes queued nine full Trash syncs where one would do, and a sync
+        // holds the account's single IMAP connection while every other command
+        // waits behind it -- which is how a delete came to take 17 seconds.
+        //
+        // Not a TTL: that would skip the *last* resync of a burst as readily as
+        // the redundant middle ones, and leave the destination folder missing
+        // whatever the burst finished with.
+        self.pending_resyncs.extend(folder_ids);
+        if !self.pending_operations.is_empty() {
+            return;
+        }
+        let folder_ids: Vec<FolderId> = self.pending_resyncs.drain().collect();
         if folder_ids.is_empty() {
             return;
         }
@@ -899,6 +916,7 @@ impl AppState {
             .filter_map(|folder| Some((folder, self.account_of_folder(folder)?)))
             .collect();
         let service = self.service.clone();
+        let synced: Vec<FolderId> = targets.iter().map(|(folder, _)| *folder).collect();
         cx.spawn(async move |this, cx| {
             for (folder, account) in targets {
                 // Sequential: folders on one account share a connection, so
@@ -922,7 +940,19 @@ impl AppState {
             }
             let _ = this.update(cx, |state, cx| {
                 state.refresh_folders(cx);
-                state.refresh_messages(cx);
+                // Only when the resync touched what is on screen. Deleting from
+                // the inbox resyncs Trash, which does not -- and this task
+                // finishes on its own schedule, so an unconditional rebuild
+                // read a store the rest of a burst had not reached yet and
+                // flickered the deleted rows back in. It clobbered an
+                // optimistic `set_seen_locally` the same way, putting the
+                // unread dot back until the mark-read command landed.
+                if synced
+                    .iter()
+                    .any(|folder| state.selected_folder_ids_contain(*folder))
+                {
+                    state.refresh_messages(cx);
+                }
             });
         })
         .detach();
@@ -2006,7 +2036,13 @@ impl AppState {
             self.self_changed_folder = None;
             return true;
         }
-        false
+        // A burst -- deleting a run of messages -- issues one command each and
+        // the daemon announces each separately, but the slot above holds a
+        // single expectation, so every announcement after the first was acted
+        // on. Each rebuilt the list from a store the remaining commands had not
+        // reached yet, resurrecting rows already removed optimistically: the
+        // ghost rows that flickered in and out for the length of the burst.
+        !self.pending_operations.is_empty() && self.selected_folder == Some(folder)
     }
 
     pub fn dark_mode_for_selected(&self) -> crate::config::EmailDarkMode {
