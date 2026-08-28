@@ -121,7 +121,10 @@ async fn full_sync_against_a_real_imap_server() {
             .unwrap()
             .expect("body should now be cached")
     };
-    assert_eq!(text.as_deref(), Some("First message body.\r\n"));
+    // No trailing CRLF, unlike message 2: that one is multipart, so its text
+    // part keeps the newline that precedes the boundary. This one is a plain
+    // single-part message.
+    assert_eq!(text.as_deref(), Some("First message body."));
 
     let msg1_uid = page[1].uid;
     session
