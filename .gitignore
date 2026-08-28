@@ -2,3 +2,6 @@
 
 # engrym derived index (rebuildable)
 .engrym/
+
+# macOS Finder metadata
+.DS_Store
