@@ -1988,10 +1988,16 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
     // in theory, we're not supposed to invoke this method manually but it balances out
     // the spurious `becomeKeyWindow` event and helps us work around that bug.
     if selector == sel!(windowDidBecomeKey:) && !is_active {
+        // BIRDMAN PATCH: drop the lock first. `resignKeyWindow` posts
+        // `windowDidResignKey:` synchronously, which re-enters this function on
+        // the same thread and blocks forever on the mutex this call still
+        // holds. Every other path below already drops it before calling out.
+        let native_window = lock.native_window;
+        drop(lock);
         unsafe {
-            let _: () = msg_send![lock.native_window, resignKeyWindow];
-            return;
+            let _: () = msg_send![native_window, resignKeyWindow];
         }
+        return;
     }
 
     let executor = lock.executor.clone();
