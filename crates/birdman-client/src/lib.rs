@@ -14,7 +14,7 @@ use birdman_store::{AccountId, Folder, FolderId, MessageId, MessageSummary, Page
 
 mod spawn;
 
-pub use spawn::ensure_daemon;
+pub use spawn::{ensure_daemon, stop_without_handshake};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -24,7 +24,10 @@ pub enum ClientError {
     Server(String),
     #[error("birdmand answered {asked} with something else")]
     Mismatch { asked: &'static str },
-    #[error("birdmand speaks protocol {daemon}, this build speaks {client} -- run `birdman daemon restart`")]
+    #[error(
+        "birdmand speaks protocol {daemon}, this build speaks {client} -- the running mailbox is \
+         newer than this build, so upgrade it, or stop the mailbox with `birdman daemon stop`"
+    )]
     VersionMismatch { daemon: u32, client: u32 },
 }
 
@@ -116,7 +119,9 @@ impl Client {
         let socket = birdman_proto::socket_path(&birdman_config::data_dir());
         spawn::ensure_daemon(&socket)?;
         Ok(Self {
-            conns: Mutex::new(vec![Arc::new(Mutex::new(Connection::open(&socket)?))]),
+            conns: Mutex::new(vec![Arc::new(Mutex::new(Self::open_replacing_stale(
+                &socket,
+            )?))]),
             socket,
             next_id: AtomicU64::new(1),
         })
@@ -141,6 +146,34 @@ impl Client {
 
     /// Reconnects once on a transport failure: the daemon stops itself when
     /// idle, so an unused connection can legitimately be found closed.
+    /// Opens a connection, replacing a daemon left behind by an older build.
+    ///
+    /// [`spawn::ensure_daemon`] only checks that *something* is listening, so
+    /// after an upgrade the previous daemon keeps serving until it next goes
+    /// idle. The handshake catches that, but leaving it as an error means the
+    /// remedy is a CLI command -- which someone who only ever launches the
+    /// desktop app has no reason to know exists.
+    ///
+    /// Only ever replaces an **older** daemon. A newer one belongs to a newer
+    /// build, presumably also running; swapping it for ours would leave the two
+    /// restarting each other for as long as both are open.
+    fn open_replacing_stale(socket: &Path) -> Result<Connection> {
+        match Connection::open(socket) {
+            Err(ClientError::VersionMismatch { daemon, client }) if daemon < client => {
+                log::info!(
+                    "birdmand speaks protocol {daemon} and this build speaks {client}; \
+                     restarting it"
+                );
+                spawn::stop_without_handshake(socket).map_err(|err| {
+                    ClientError::Transport(format!("could not stop the old birdmand: {err}"))
+                })?;
+                spawn::ensure_daemon(socket)?;
+                Connection::open(socket)
+            }
+            other => other,
+        }
+    }
+
     fn call(&self, kind: RequestKind) -> Result<WireResult> {
         match self.call_once(&kind) {
             Err(ClientError::Transport(_)) => {
@@ -173,7 +206,7 @@ impl Client {
             }
         }
         if existing.len() < Self::MAX_CONNECTIONS {
-            let slot = Arc::new(Mutex::new(Connection::open(&self.socket)?));
+            let slot = Arc::new(Mutex::new(Self::open_replacing_stale(&self.socket)?));
             let mut conns = self.conns.lock().map_err(|_| poisoned())?;
             // Re-checked: another thread may have grown the pool meanwhile, and
             // going over the cap is worse than dropping this one unused.
@@ -484,7 +517,7 @@ impl Client {
             let _timed = Timed::new(label, Timed::NETWORK);
             let outcome = (|| {
                 ensure_daemon(&socket)?;
-                let mut conn = Connection::open(&socket)?;
+                let mut conn = Self::open_replacing_stale(&socket)?;
                 let request = Request { id: 1, kind };
                 let line = serde_json::to_string(&request)
                     .map_err(|err| ClientError::Transport(err.to_string()))?;
@@ -548,7 +581,7 @@ impl Client {
     }
 
     pub fn subscribe(&self) -> Result<async_channel::Receiver<Event>> {
-        let mut conn = Connection::open(&self.socket)?;
+        let mut conn = Self::open_replacing_stale(&self.socket)?;
         let request = Request {
             id: 0,
             kind: RequestKind::Subscribe,
@@ -668,6 +701,33 @@ mod tests {
                 daemon: 6,
                 client: birdman_proto::PROTOCOL_VERSION
             })
+        ));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_newer_daemon_is_reported_rather_than_replaced() {
+        let (_dir, path, listener) = socket();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            read_request(&mut reader);
+            reply(
+                &mut stream,
+                0,
+                WireResult::VersionMismatch {
+                    daemon: birdman_proto::PROTOCOL_VERSION + 1,
+                    client: birdman_proto::PROTOCOL_VERSION,
+                },
+            );
+        });
+
+        // An older daemon gets restarted; a newer one must not, or this build
+        // and the newer one would replace each other for as long as both run.
+        // Reaching the restart at all would try to stop the fake server here.
+        assert!(matches!(
+            Client::open_replacing_stale(&path),
+            Err(ClientError::VersionMismatch { .. })
         ));
         server.join().unwrap();
     }

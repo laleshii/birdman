@@ -67,3 +67,55 @@ fn daemon_binary() -> Result<std::path::PathBuf, ClientError> {
     }
     Ok(std::path::PathBuf::from("birdmand"))
 }
+
+/// Stops a daemon without the protocol handshake.
+///
+/// [`crate::Connection::open`] refuses on a version mismatch, and a
+/// version-mismatched daemon is exactly the one that has to be stopped, so this
+/// speaks the wire format directly rather than going through `Client`.
+pub fn stop_without_handshake(socket: &Path) -> std::io::Result<()> {
+    if ask_politely(socket).is_ok() && wait_for_exit(socket) {
+        return Ok(());
+    }
+    match read_pid(socket) {
+        Some(pid) => {
+            // SIGTERM, not SIGKILL: the daemon has a store to close.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+            if wait_for_exit(socket) {
+                let _ = std::fs::remove_file(socket);
+                let _ = std::fs::remove_file(socket.with_extension("pid"));
+                Ok(())
+            } else {
+                Err(std::io::Error::other("it did not exit"))
+            }
+        }
+        None => Err(std::io::Error::other(
+            "it did not answer a shutdown request and left no pid file \
+             (a daemon from an older build) -- `pkill -f birdmand`",
+        )),
+    }
+}
+
+fn ask_politely(socket: &Path) -> std::io::Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
+    writeln!(stream, r#"{{"id":1,"kind":"shutdown"}}"#)?;
+    stream.flush()?;
+    let mut reply = String::new();
+    BufReader::new(&stream).read_line(&mut reply)?;
+    // An older daemon answers with an error rather than closing, so the reply
+    // proves nothing; `wait_for_exit` decides.
+    Ok(())
+}
+
+fn read_pid(socket: &Path) -> Option<i32> {
+    std::fs::read_to_string(socket.with_extension("pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn wait_for_exit(socket: &Path) -> bool {
+    wait_for_stop(socket, Duration::from_secs(2))
+}

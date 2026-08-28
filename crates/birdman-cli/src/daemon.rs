@@ -84,7 +84,7 @@ pub fn stop() -> i32 {
     }
     // Straight to the socket: `Client::connect` would refuse on the handshake,
     // and a version-mismatched daemon is exactly the one you need to stop.
-    match stop_without_handshake() {
+    match birdman_client::stop_without_handshake(&Client::socket_path()) {
         Ok(()) => {
             println!("stopped");
             0
@@ -97,7 +97,9 @@ pub fn stop() -> i32 {
 }
 
 pub fn restart() -> i32 {
-    if Client::is_running() && stop_without_handshake().is_err() {
+    if Client::is_running()
+        && birdman_client::stop_without_handshake(&Client::socket_path()).is_err()
+    {
         eprintln!("could not stop the running daemon");
         return 1;
     }
@@ -120,56 +122,13 @@ pub fn restart() -> i32 {
     }
 }
 
-fn stop_without_handshake() -> std::io::Result<()> {
-    if ask_politely().is_ok() && wait_for_exit() {
-        return Ok(());
-    }
-    match read_pid() {
-        Some(pid) => {
-            // SIGTERM, not SIGKILL: the daemon has a store to close.
-            unsafe { libc::kill(pid, libc::SIGTERM) };
-            if wait_for_exit() {
-                let socket = Client::socket_path();
-                let _ = std::fs::remove_file(&socket);
-                let _ = std::fs::remove_file(socket.with_extension("pid"));
-                Ok(())
-            } else {
-                Err(std::io::Error::other("it did not exit"))
-            }
-        }
-        None => Err(std::io::Error::other(
-            "it did not answer a shutdown request and left no pid file \
-             (a daemon from an older build) -- `pkill -f birdmand`",
-        )),
-    }
-}
-
-fn ask_politely() -> std::io::Result<()> {
-    use std::io::{BufRead, BufReader, Write};
-    let mut stream = std::os::unix::net::UnixStream::connect(Client::socket_path())?;
-    writeln!(stream, r#"{{"id":1,"kind":"shutdown"}}"#)?;
-    stream.flush()?;
-    let mut reply = String::new();
-    BufReader::new(&stream).read_line(&mut reply)?;
-    // An older daemon answers with an error rather than closing, so the reply
-    // proves nothing; `wait_for_exit` decides.
-    Ok(())
-}
-
+/// Only for reporting it in `status`. Stopping the daemon is
+/// `birdman_client::stop_without_handshake`, which has its own copy of this
+/// because it also has to work when the handshake is what is broken.
 fn read_pid() -> Option<i32> {
     std::fs::read_to_string(Client::socket_path().with_extension("pid"))
         .ok()?
         .trim()
         .parse()
         .ok()
-}
-
-fn wait_for_exit() -> bool {
-    for _ in 0..40 {
-        if !Client::is_running() {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    false
 }

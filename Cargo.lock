@@ -635,6 +635,7 @@ dependencies = [
  "birdman-config",
  "birdman-proto",
  "birdman-store",
+ "libc",
  "log",
  "serde_json",
  "tempfile",
