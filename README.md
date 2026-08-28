@@ -114,9 +114,9 @@ Birdman is distributed through cargo; there are no prebuilt binaries. With the
 prerequisites above in place:
 
 ```sh
-cargo install --git https://github.com/laleshii/birdman --tag v0.1.2 birdman-daemon
-cargo install --git https://github.com/laleshii/birdman --tag v0.1.2 birdman-cli
-cargo install --git https://github.com/laleshii/birdman --tag v0.1.2 birdman-ui   # desktop app
+cargo install --git https://github.com/laleshii/birdman --tag v0.1.3 birdman-daemon
+cargo install --git https://github.com/laleshii/birdman --tag v0.1.3 birdman-cli
+cargo install --git https://github.com/laleshii/birdman --tag v0.1.3 birdman-ui   # desktop app
 ```
 
 That installs `birdmand`, `birdman` and `birdman-desktop` into `~/.cargo/bin`. Keep
@@ -133,7 +133,7 @@ needs the Linux system libraries.
 To get an entry you can actually launch, clone and run the installer instead:
 
 ```sh
-git clone --branch v0.1.2 https://github.com/laleshii/birdman
+git clone --branch v0.1.3 https://github.com/laleshii/birdman
 cd birdman
 ./scripts/install.sh              # --no-desktop for just the mailbox and the CLI
 ```
