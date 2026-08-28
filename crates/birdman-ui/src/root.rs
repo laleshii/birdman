@@ -507,7 +507,6 @@ fn sidebar(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
                         .items_center()
                         .justify_center()
                         .gap_1p5()
-                        .truncate()
                         .text_color(theme::color(if is_error {
                             theme::DANGER
                         } else {
@@ -522,8 +521,16 @@ fn sidebar(s: &AppState, state: &Entity<AppState>) -> impl IntoElement {
                                 state.set_logs(open, cx);
                             });
                         })
-                        .when(activity.is_some(), |el| el.child(spinner()))
-                        .child(status)
+                        // The dot sits outside the truncating box and does
+                        // not shrink. Inside it, `justify_center` pushed the
+                        // overflow out of both edges and the clip took the dot
+                        // with it, so the one element saying "still working"
+                        // disappeared exactly when the text got long enough to
+                        // be worth reading.
+                        .when(activity.is_some(), |el| {
+                            el.child(div().flex_shrink_0().child(spinner()))
+                        })
+                        .child(div().min_w(px(0.0)).truncate().child(status))
                 })
                 .child(div().flex_shrink_0().child(settings_button(state)))
         })
