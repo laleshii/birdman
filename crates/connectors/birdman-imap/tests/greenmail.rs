@@ -105,6 +105,24 @@ async fn full_sync_against_a_real_imap_server() {
     };
     assert_eq!(text.as_deref(), Some("Second message body.\r\n"));
 
+    // A *second* body fetch on the same session, which is what regressed:
+    // abandoning the first fetch's stream before its tagged completion left
+    // that reply in the connection buffer, so this call read it instead and
+    // came back with message 2's body under message 1's uid. One fetch alone
+    // never showed it.
+    let msg1 = &page[1];
+    fetch_message_body(&mut session, &store, msg1.id, msg1.uid)
+        .await
+        .expect("a second body fetch on the same session should succeed");
+    let (text, _html) = {
+        let store = store.lock().unwrap();
+        store
+            .get_message_body(msg1.id)
+            .unwrap()
+            .expect("body should now be cached")
+    };
+    assert_eq!(text.as_deref(), Some("First message body.\r\n"));
+
     let msg1_uid = page[1].uid;
     session
         .uid_store(msg1_uid.to_string(), "+FLAGS (\\Seen)")

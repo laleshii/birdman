@@ -27,6 +27,13 @@ pub async fn fetch_message_body(
     let fetch = stream.try_next().await?.ok_or(CoreError::MessageMissing)?;
     let body = fetch.body().ok_or(CoreError::MessageMissing)?;
     let parsed = birdman_mime::parse_message(body)?;
+    // Drained, not just dropped. The stream ends at the tagged completion, and
+    // abandoning it early leaves that in the connection buffer for the next
+    // command to read as its own reply -- so every backfill left the session one
+    // response behind and the next body arrived under the previous message's
+    // uid. The bulk fetches below consume theirs with `while let`; this one
+    // takes a single item and has to finish the job by hand.
+    while stream.try_next().await?.is_some() {}
     drop(stream);
 
     let expected = {
@@ -41,7 +48,7 @@ pub async fn fetch_message_body(
         if expected != fetched {
             log::error!(
                 "refusing body for message {message_id:?} (uid {uid}): server returned {fetched:?}, \
-                 expected {expected:?} -- the wrong mailbox was selected"
+                 expected {expected:?} -- not storing it under this id"
             );
             return Err(CoreError::MessageMissing);
         }
