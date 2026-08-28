@@ -36,6 +36,17 @@ fn main() {
                 init_gtk_for_webview(cx);
             }
 
+            // A windowless gpui app lingers as a headless process otherwise.
+            // Registered before the branch below: the unconfigured path opens
+            // the onboarding window and returns without reaching
+            // `launch_main_app`.
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+
             let accounts = match config {
                 Config::Accounts(accounts) => accounts,
                 Config::Unconfigured { path, error } => {
@@ -221,14 +232,6 @@ pub(crate) fn launch_main_app(cx: &mut App, _accounts: Vec<ConfiguredAccount>) {
             gpui::MenuItem::action("Quit", Quit),
         ],
     }]);
-    // A windowless gpui app lingers as a headless process otherwise.
-    cx.on_window_closed(|cx| {
-        if cx.windows().is_empty() {
-            cx.quit();
-        }
-    })
-    .detach();
-
     let font_family = ui_font_family(cx);
     let bounds = Bounds::centered(None, size(px(1000.0), px(700.0)), cx);
     cx.open_window(
