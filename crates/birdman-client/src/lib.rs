@@ -159,7 +159,14 @@ impl Client {
         let line = serde_json::to_string(&request)
             .map_err(|err| ClientError::Transport(format!("could not encode request: {err}")))?;
 
-        let mut conn = self.conn.lock().map_err(|_| poisoned())?;
+        // Timed apart from the round trip above it. Every query shares this one
+        // connection for the whole of its request and reply, so a slow one
+        // delays the rest -- and until these were separated a queued query and
+        // a slow one were indistinguishable in the log.
+        let mut conn = {
+            let _queued = Timed::new(format!("{} queued", describe(kind)), Timed::ROUND_TRIP);
+            self.conn.lock().map_err(|_| poisoned())?
+        };
         writeln!(conn.write, "{line}").map_err(|err| ClientError::Transport(err.to_string()))?;
         conn.write
             .flush()
