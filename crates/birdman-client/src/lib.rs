@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use birdman_backend::{Command, Outcome, OutgoingMessage};
@@ -33,9 +34,13 @@ pub type ClientFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = Re
 
 pub struct Client {
     socket: PathBuf,
-    /// Behind a mutex: a reply belongs to the request written immediately
-    /// before it, so two requests must not interleave on this connection.
-    conn: Mutex<Connection>,
+    /// A reply belongs to the request written immediately before it, so one
+    /// connection carries one request at a time. A second is opened only when
+    /// every existing one is busy -- the daemon serves each connection strictly
+    /// in order and says so itself: "A client wanting concurrency opens a
+    /// second connection". Sharing one made every query wait for the slowest,
+    /// which during a folder sync was 6s of queueing for a reply that took 1ms.
+    conns: Mutex<Vec<Arc<Mutex<Connection>>>>,
     next_id: AtomicU64,
 }
 
@@ -111,7 +116,7 @@ impl Client {
         let socket = birdman_proto::socket_path(&birdman_config::data_dir());
         spawn::ensure_daemon(&socket)?;
         Ok(Self {
-            conn: Mutex::new(Connection::open(&socket)?),
+            conns: Mutex::new(vec![Arc::new(Mutex::new(Connection::open(&socket)?))]),
             socket,
             next_id: AtomicU64::new(1),
         })
@@ -140,13 +145,46 @@ impl Client {
         match self.call_once(&kind) {
             Err(ClientError::Transport(_)) => {
                 spawn::ensure_daemon(&self.socket)?;
-                let mut conn = self.conn.lock().map_err(|_| poisoned())?;
-                *conn = Connection::open(&self.socket)?;
-                drop(conn);
+                // The whole pool, not just this one: a transport error means the
+                // daemon went away, which makes every connection to it stale. A
+                // caller still holding one keeps it alive through its `Arc`.
+                self.conns.lock().map_err(|_| poisoned())?.clear();
                 self.call_once(&kind)
             }
             other => other,
         }
+    }
+
+    /// One connection is enough until it isn't. Opening a second costs a
+    /// handshake, so it happens only when every existing one is in use.
+    ///
+    /// The cap bounds how many the daemon has to serve concurrently; past it a
+    /// caller waits, which is what every caller did before.
+    const MAX_CONNECTIONS: usize = 4;
+
+    fn checkout(&self) -> Result<Arc<Mutex<Connection>>> {
+        let existing = { self.conns.lock().map_err(|_| poisoned())?.clone() };
+        for slot in &existing {
+            // Dropped immediately: this only asks whether the connection is
+            // free, and the caller re-locks it to use it. Losing the race means
+            // waiting on a connection that was free a moment ago, not an error.
+            if slot.try_lock().is_ok() {
+                return Ok(slot.clone());
+            }
+        }
+        if existing.len() < Self::MAX_CONNECTIONS {
+            let slot = Arc::new(Mutex::new(Connection::open(&self.socket)?));
+            let mut conns = self.conns.lock().map_err(|_| poisoned())?;
+            // Re-checked: another thread may have grown the pool meanwhile, and
+            // going over the cap is worse than dropping this one unused.
+            if conns.len() < Self::MAX_CONNECTIONS {
+                conns.push(slot.clone());
+                return Ok(slot);
+            }
+        }
+        existing.first().cloned().ok_or_else(|| {
+            ClientError::Transport("the connection pool was emptied concurrently".into())
+        })
     }
 
     fn call_once(&self, kind: &RequestKind) -> Result<WireResult> {
@@ -163,9 +201,10 @@ impl Client {
         // connection for the whole of its request and reply, so a slow one
         // delays the rest -- and until these were separated a queued query and
         // a slow one were indistinguishable in the log.
+        let slot = self.checkout()?;
         let mut conn = {
             let _queued = Timed::new(format!("{} queued", describe(kind)), Timed::ROUND_TRIP);
-            self.conn.lock().map_err(|_| poisoned())?
+            slot.lock().map_err(|_| poisoned())?
         };
         writeln!(conn.write, "{line}").map_err(|err| ClientError::Transport(err.to_string()))?;
         conn.write
@@ -503,8 +542,8 @@ impl Client {
             ));
         }
         spawn::ensure_daemon(&self.socket)?;
-        let mut conn = self.conn.lock().map_err(|_| poisoned())?;
-        *conn = Connection::open(&self.socket)?;
+        // Every one of them was talking to the daemon that just stopped.
+        self.conns.lock().map_err(|_| poisoned())?.clear();
         Ok(())
     }
 
@@ -652,7 +691,7 @@ mod tests {
         });
 
         let client = Client {
-            conn: Mutex::new(Connection::open(&path).unwrap()),
+            conns: Mutex::new(vec![Arc::new(Mutex::new(Connection::open(&path).unwrap()))]),
             socket: path,
             next_id: AtomicU64::new(1),
         };
