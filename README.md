@@ -73,9 +73,64 @@ what keeps the protocol honest.
 
 ## Prerequisites
 
-- **Rust** (stable), via [rustup](https://rustup.rs)
+- **Rust** (stable), via [rustup](https://rustup.rs). The pinned toolchain is in
+  `rust-toolchain.toml`; rustup installs it for you on the first build.
+- **On macOS, the Xcode Command Line Tools** for the linker — `xcode-select --install`.
+  Nothing else: WKWebView and the Keychain are part of the system, so the desktop app
+  needs no extra packages.
 - **Somewhere to keep the credential.** On macOS that is the system Keychain, already present. On Linux it is a running Secret Service provider — `gnome-keyring`, KWallet (with its Secret Service integration), or equivalent. Neither is needed if you configure `auth.type = "command"` or `"env"` instead.
-- **Only if you want the desktop app, and only on Linux**, the system libraries GPUI and the embedded webview need — the daemon and the CLI need none of them: X11 and Wayland client libraries, `libxkbcommon`, `fontconfig`, `freetype`, OpenSSL, and WebKitGTK (`libwebkit2gtk-4.1-dev` on Debian/Ubuntu, `webkit2gtk-4.1` on Arch). On most desktop Linux installs these are already present; if a build fails looking for one of them, install its `-dev`/`-devel` package (e.g. `libxkbcommon-dev`, `libssl-dev`, `libfontconfig-dev` on Debian/Ubuntu; `libxkbcommon`, `openssl`, `fontconfig` on Arch) and retry.
+- **Only if you want the desktop app, and only on Linux**, the system libraries GPUI and
+  the embedded webview need. The daemon and the CLI need none of them, so
+  `cargo build -p birdmand -p birdman-cli` works on a bare machine.
+
+On Debian/Ubuntu — this is the list CI installs, so it is the one that is kept true:
+
+```sh
+sudo apt-get install -y --no-install-recommends \
+  libwebkit2gtk-4.1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libfontconfig-dev libfreetype-dev libssl-dev libwayland-dev libxcb1-dev \
+  libx11-dev libgbm-dev libvulkan-dev
+```
+
+The equivalents elsewhere:
+
+```sh
+# Arch
+sudo pacman -S --needed webkit2gtk-4.1 libxkbcommon libxkbcommon-x11 fontconfig \
+  freetype2 openssl wayland libxcb libx11 mesa vulkan-icd-loader
+
+# Fedora
+sudo dnf install webkit2gtk4.1-devel libxkbcommon-devel libxkbcommon-x11-devel \
+  fontconfig-devel freetype-devel openssl-devel wayland-devel libxcb-devel \
+  libX11-devel mesa-libgbm-devel vulkan-loader-devel
+```
+
+On most desktop Linux installs these are already present. If a build fails looking for
+one of them, install its `-dev`/`-devel` package and retry.
+
+## Installing
+
+Birdman is distributed through cargo; there are no prebuilt binaries. With the
+prerequisites above in place:
+
+```sh
+cargo install --git https://github.com/laleshii/birdman --tag v0.1.0 birdman-daemon
+cargo install --git https://github.com/laleshii/birdman --tag v0.1.0 birdman-cli
+cargo install --git https://github.com/laleshii/birdman --tag v0.1.0 birdman-ui   # desktop app
+```
+
+That installs `birdmand`, `birdman` and `birdman-desktop` into `~/.cargo/bin`. Keep
+`birdman` and `birdmand` together there — a client looks for the daemon beside its own
+binary before falling back to `PATH`.
+
+Drop the last line if you only want the mailbox and the CLI; it is the only one that
+needs the Linux system libraries.
+
+Installing from git rather than crates.io is deliberate. The workspace patches three
+dependencies to vendored copies (`[patch.crates-io]` in the root `Cargo.toml`), and a
+`[patch]` table applies only to builds from within that workspace. Published to
+crates.io, the same crates would resolve the unpatched upstream versions and take back
+the bugs those patches fix.
 
 ## Building
 
