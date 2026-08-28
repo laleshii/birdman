@@ -1122,6 +1122,12 @@ impl AppState {
                      -- one keypress reaching more than one handler?",
                     apart.as_millis()
                 );
+                // Dropped, not just reported. One press has been seen to reach
+                // this three times a few ms apart, which moved the selection
+                // three rows; the duplication itself is in gpui's key dispatch
+                // and is not understood yet. A held arrow repeats at ~33ms, so
+                // the window cannot swallow a real one.
+                return;
             }
         }
         // Selected first, because that notifies: a scroll requested before it
