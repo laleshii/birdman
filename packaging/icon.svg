@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="230" fill="#FFFFFF"/>
+  <g fill="none" stroke="#111111" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <!-- two daft head feathers -->
+    <path d="M474 188 l-30 -74"/>
+    <path d="M542 184 l18 -78"/>
+    <!-- head -->
+    <circle cx="504" cy="366" r="168"/>
+    <!-- eye -->
+    <circle cx="556" cy="312" r="21" fill="#111111" stroke="none"/>
+    <!-- beak -->
+    <path d="M668 348 l112 32 l-108 46 z" fill="#111111"/>
+    <!-- neck -->
+    <path d="M504 534 l0 62"/>
+    <!-- shoulders, sweeping down into arms in one stroke -->
+    <path d="M232 894 q6 -170 128 -226 q68 -32 144 -32 q76 0 144 32 q122 56 128 226"/>
+    <!-- collar -->
+    <path d="M424 640 l80 74 l80 -74"/>
+    <!-- tie -->
+    <path d="M504 714 l-30 42 l30 122 l30 -122 z" fill="#111111"/>
+  </g>
+</svg>

@@ -126,6 +126,32 @@ binary before falling back to `PATH`.
 Drop the last line if you only want the mailbox and the CLI; it is the only one that
 needs the Linux system libraries.
 
+### Installing the desktop app as an application
+
+`cargo install` leaves a bare executable, which is not an application: macOS shows only
+`.app` bundles in Spotlight and Launchpad, and Linux launchers read `.desktop` entries.
+To get an entry you can actually launch, clone and run the installer instead:
+
+```sh
+git clone --branch v0.1.0 https://github.com/laleshii/birdman
+cd birdman
+./scripts/install.sh              # --no-desktop for just the mailbox and the CLI
+```
+
+It installs the same binaries and then, on macOS, builds `~/Applications/Birdman.app`
+and code-signs it; on Linux it writes `birdman.desktop` into
+`~/.local/share/applications` with an absolute `Exec` path, since a launcher does not
+run a login shell and will not have `~/.cargo/bin` on its `PATH`.
+
+The macOS bundle carries its own copy of `birdmand`. An app launched from Finder gets
+LaunchServices' minimal `PATH`, so the daemon beside the binary is the only one it can
+find. Re-run the script after upgrading, or the bundle keeps the older binaries.
+
+Signing is not cosmetic on macOS: a keychain item's access control is tied to the code
+signature, so an unsigned build asks permission again every time it is replaced. The
+script uses your first codesigning identity, overridable with `BIRDMAN_SIGN_ID` (`-`
+for ad-hoc).
+
 Installing from git rather than crates.io is deliberate. The workspace patches three
 dependencies to vendored copies (`[patch.crates-io]` in the root `Cargo.toml`), and a
 `[patch]` table applies only to builds from within that workspace. Published to
